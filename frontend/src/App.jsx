@@ -21,6 +21,7 @@ function App() {
   const [transferSpeed, setTransferSpeed] = useState("0 MB/s");
   const [progress, setProgress] = useState(0);
   const [showQR, setShowQR] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   // WebRTC & Transfer Refs
   const peerConnection = useRef(null);
@@ -187,6 +188,26 @@ function App() {
     socket.emit('update-note', { roomId, text: val });
   };
 
+  // Drag and Drop State Handlers
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    
+    const files = e.dataTransfer.files;
+    if (files && files[0]) {
+      sendFile(files[0]);
+    }
+  };
+
   // Global browser canvas context paste hooks (Ctrl+V)
   useEffect(() => {
     const handlePaste = (e) => {
@@ -260,13 +281,22 @@ function App() {
           />
           <div 
             onClick={() => fileInputRef.current.click()}
-            className="flex-1 min-h-[350px] bg-[#0f1626] border-2 border-dashed border-gray-800 rounded-2xl glow-card p-8 flex flex-col items-center justify-center text-center group hover:border-blue-500/50 transition-all duration-300 cursor-pointer"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`flex-1 min-h-[350px] border-2 border-dashed rounded-2xl glow-card p-8 flex flex-col items-center justify-center text-center group transition-all duration-300 cursor-pointer ${
+              isDragging 
+                ? 'border-blue-400 bg-blue-500/10 scale-[0.99]' 
+                : 'bg-[#0f1626] border-gray-800 hover:border-blue-500/50'
+            }`}
           >
-            <div className="bg-[#17223b] p-5 rounded-full text-gray-400 group-hover:text-blue-400 group-hover:scale-110 transition-all duration-300 mb-4">
+            <div className={`p-5 rounded-full transition-all duration-300 mb-4 ${
+              isDragging ? 'bg-blue-500 text-white scale-110' : 'bg-[#17223b] text-gray-400 group-hover:text-blue-400 group-hover:scale-110'
+            }`}>
               <UploadCloud size={40} />
             </div>
             <h3 className="text-lg font-semibold text-gray-200 group-hover:text-white">
-              Drag & Drop folders or files here
+              {isDragging ? "Drop your data to stream!" : "Drag & Drop folders or files here"}
             </h3>
             <p className="text-sm text-gray-400 mt-1 max-w-sm">
               Files stream directly over hardware WebRTC data wires without touching cloud servers.
