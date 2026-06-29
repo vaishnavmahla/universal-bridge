@@ -6,10 +6,9 @@ import { Shield, Clipboard, FileText, UploadCloud, Copy, RefreshCw, Zap, QrCode,
 // Connect to the Node backend port
 // const socket = io('http://localhost:5000');
 
-const socket = io('http://192.168.1.7:5000');
+// const socket = io('http://192.192.192.192:5000');
+const socket = io('https://vibeshare-backend-efbg.onrender.com');
 
-// To this exact tunnel link:
-// const socket = io('https://little-carrots-walk.loca.lt');
 
 const CHUNK_SIZE = 16384; // 16KB optimization chunks for stable WebRTC throughput
 
