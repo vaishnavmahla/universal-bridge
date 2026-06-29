@@ -47,6 +47,8 @@ async function decryptText(encryptedJson, roomId) {
   return encryptedJson;
 }
 
+
+
 // // Encrypts cleartext strings into secure string arrays
 // async function encryptText(text, roomId) {
 //   try {
