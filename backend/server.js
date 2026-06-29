@@ -25,6 +25,21 @@ const roomStates = new Map();
 
 io.on('connection', (socket) => {
   console.log(`🔌 Device connected: ${socket.id}`);
+  
+  // Add a global object at the top of your server file to hold room passwords
+const roomPasswords = {};
+
+// Inside your io.on('connection', (socket) => { ... }) block:
+socket.on('set-room-password', ({ roomId, password }) => {
+  roomPasswords[roomId] = password;
+  socket.to(roomId).emit('room-password-required', password);
+});
+
+socket.on('check-room-password', ({ roomId }) => {
+  if (roomPasswords[roomId]) {
+    socket.emit('password-check-response', roomPasswords[roomId]);
+  }
+});
 
   // 1. JOIN ROOM
   socket.on('join-room', (roomId) => {
