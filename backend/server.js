@@ -93,6 +93,16 @@ io.on('connection', (socket) => {
     }
   });
 
+  // socket.on('clear-room-data', ({ roomId }) => {
+  //   // Broadcast the clear command to everyone else in the room
+  //   socket.to(roomId).emit('room-data-cleared');
+  // });
+
+  socket.on('clear-room-data', ({ roomId }) => {
+    // Force target room broadcast directly from the primary IO engine instance
+    io.in(roomId).emit('room-data-cleared');
+  });
+
   socket.on('disconnect', () => {
     console.log(`❌ Device disconnected: ${socket.id}`);
   });
