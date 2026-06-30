@@ -10,6 +10,7 @@ import { Shield, Clipboard, FileText, UploadCloud, Copy, RefreshCw, Zap, QrCode,
 const socket = io('https://vibeshare-backend-efbg.onrender.com');
 
 
+
 const CHUNK_SIZE = 16384; // 16KB optimization chunks for stable WebRTC throughput
 
 // Generates a deterministic AES-GCM secret key using the Room ID text
