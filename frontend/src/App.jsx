@@ -2,115 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import { QRCodeSVG } from 'qrcode.react';
 import { Shield, Clipboard, FileText, UploadCloud, Copy, RefreshCw, Zap, QrCode, X, Lock } from 'lucide-react';
+import { CryptoMatrix } from './crypto';
 
 // Connect to the Node backend port
-// const socket = io('http://localhost:5000');
-
-// const socket = io('http://192.192.192.192:5000');
 const socket = io('https://vibeshare-backend-efbg.onrender.com');
 
-
-
 const CHUNK_SIZE = 16384; // 16KB optimization chunks for stable WebRTC throughput
-
-// Generates a deterministic AES-GCM secret key using the Room ID text
-async function getEncryptionKey(roomId) {
-  const enc = new TextEncoder();
-  const keyMaterial = await window.crypto.subtle.importKey(
-    "raw",
-    enc.encode(roomId.padEnd(16, "0").substring(0, 16)), // Ensure valid length matrix alignment
-    { name: "PBKDF2" },
-    false,
-    ["deriveBits", "deriveKey"]
-  );
-  return window.crypto.subtle.deriveKey(
-    {
-      name: "PBKDF2",
-      salt: enc.encode("vibe-salt-matrix-99"),
-      iterations: 1000,
-      hash: "SHA-256",
-    },
-    keyMaterial,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"]
-  );
-}
-
-async function encryptText(text, roomId) {
-  // Completely strip out encryption - send raw text over the network instantly
-  return text;
-}
-
-async function decryptText(encryptedJson, roomId) {
-  // Completely strip out decryption - return the text exactly as it arrives
-  return encryptedJson;
-}
-
-
-
-// // Encrypts cleartext strings into secure string arrays
-// async function encryptText(text, roomId) {
-//   try {
-//     // Safety check: If the browser doesn't support subtle crypto, send as plain text
-//     if (!window.crypto || !window.crypto.subtle) {
-//       console.warn("Web Crypto not supported/blocked in this browser context. Using plain transport.");
-//       return text;
-//     }
-
-//     const key = await getEncryptionKey(roomId);
-//     const enc = new TextEncoder();
-//     const iv = window.crypto.getRandomValues(new Uint8Array(12));
-    
-//     const encrypted = await window.crypto.subtle.encrypt(
-//       { name: "AES-GCM", iv: iv },
-//       key,
-//       enc.encode(text)
-//     );
-    
-//     return JSON.stringify({
-//       cipher: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
-//       iv: btoa(String.fromCharCode(...iv))
-//     });
-//   } catch (e) {
-//     console.error("Encryption failed, falling back to plaintext:", e);
-//     return text;
-//   }
-// }
-
-// // Decrypts incoming cipher strings back into standard text layout arrays
-// // Upgraded Decrypt Text method with structural fallback loops
-// async function decryptText(encryptedJson, roomId) {
-//   try {
-//     // 1. If it's not a JSON string containing our cipher signature, treat it as raw plain text
-//     if (!encryptedJson || !encryptedJson.startsWith('{"cipher"')) {
-//       return encryptedJson;
-//     }
-
-//     // 2. If the browser blocks Web Crypto API, handle the fallback gracefully
-//     if (!window.crypto || !window.crypto.subtle) {
-//       return "[Secure E2EE Packet - Open on Secure Host]";
-//     }
-
-//     const { cipher, iv } = JSON.parse(encryptedJson);
-//     const key = await getEncryptionKey(roomId);
-//     const dec = new TextDecoder();
-    
-//     const ivBuffer = new Uint8Array(atob(iv).split("").map(c => c.charCodeAt(0)));
-//     const cipherBuffer = new Uint8Array(atob(cipher).split("").map(c => c.charCodeAt(0)));
-    
-//     const decrypted = await window.crypto.subtle.decrypt(
-//       { name: "AES-GCM", iv: ivBuffer },
-//       key,
-//       cipherBuffer
-//     );
-//     return dec.decode(decrypted);
-//   } catch (e) {
-//     // 3. Absolute safety fallback: if parsing or decryption breaks, return the raw input string
-//     console.warn("Decryption structural bypass:", e);
-//     return encryptedJson;
-//   }
-// }
 
 // Synthesizes a premium, clean UI chime tone natively using browser hardware audio nodes
 const playSyncChime = () => {
@@ -141,22 +38,19 @@ const playSyncChime = () => {
 };
 
 function App() {
-  // Generate a clean random room code if not provided in the URL hash, forcing uniform spacing
+  // Application State
+  const [aesKey, setAesKey] = useState(null);
+  const aesKeyRef = useRef(null); // Used to keep socket listeners updated with the latest key
+
   const [roomId, setRoomId] = useState(() => {
     const hash = window.location.hash.replace('#', '').trim();
     const cleanHash = decodeURIComponent(hash).replace(/\s+/g, '-').toUpperCase();
     return cleanHash || `ROOM-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
   });
 
-  const [roomPassword, setRoomPassword] = useState(() => {
-    // Check if a password was already created for this session
-    return localStorage.getItem(`pass_${roomId}`) || '';
-  });
+  const [roomPassword, setRoomPassword] = useState(() => localStorage.getItem(`pass_${roomId}`) || '');
   const [passwordInput, setPasswordInput] = useState('');
-  const [isUnlocked, setIsUnlocked] = useState(() => {
-    // If the room creator already set it, keep it unlocked locally
-    return localStorage.getItem(`pass_${roomId}`) ? true : false;
-  });
+  const [isUnlocked, setIsUnlocked] = useState(false);
 
   const [note, setNote] = useState("");
   const [clipboardItems, setClipboardItems] = useState([]);
@@ -173,23 +67,33 @@ function App() {
   const incomingFileName = useRef('');
   const fileInputRef = useRef(null);
 
+  // Keep ref synchronized for async callbacks
+  useEffect(() => {
+    aesKeyRef.current = aesKey;
+  }, [aesKey]);
+
   // 1. INITIALIZE ROOM AND SOCKET SIGNALING PIPELINES
   useEffect(() => {
     window.location.hash = roomId;
     
-    // Announce presence to room immediately on load/change
     socket.emit('join-room', roomId);
 
     socket.on('init-note', async (initialText) => {
-      if (initialText) {
-        const decrypted = await decryptText(initialText, roomId);
-        setNote(decrypted);
+      if (initialText && aesKeyRef.current) {
+        try {
+          const decrypted = await CryptoMatrix.decrypt(initialText, aesKeyRef.current);
+          setNote(decrypted);
+        } catch (e) { console.error("Decryption failed on init"); }
       }
     });
 
     socket.on('note-updated', async (text) => {
-      const decrypted = await decryptText(text, roomId);
-      setNote(decrypted);
+      if (text && aesKeyRef.current) {
+        try {
+          const decrypted = await CryptoMatrix.decrypt(text, aesKeyRef.current);
+          setNote(decrypted);
+        } catch (e) { console.error("Decryption failed on update"); }
+      }
     });
 
     socket.on('room-data-cleared', () => {
@@ -198,15 +102,17 @@ function App() {
     });
 
     socket.on('clipboard-received', async (item) => {
-      const decryptedContent = await decryptText(item.content, roomId);
-      setClipboardItems((prev) => [{ ...item, content: decryptedContent }, ...prev]);
-      playSyncChime();
+      if (item.content && aesKeyRef.current) {
+        try {
+          // Socket.io sends binary as ArrayBuffer natively
+          const decryptedContent = await CryptoMatrix.decrypt(item.content, aesKeyRef.current);
+          setClipboardItems((prev) => [{ ...item, content: decryptedContent }, ...prev]);
+          playSyncChime();
+        } catch (e) { console.error("Decryption failed on clipboard"); }
+      }
     });
 
-    // Handle incoming WebRTC signaling data
-    socket.on('peer-ready', async (peerId) => {
-      initiateWebRTC(peerId, true);
-    });
+    socket.on('peer-ready', async (peerId) => initiateWebRTC(peerId, true));
 
     socket.on('webrtc-offer', async ({ senderId, offer }) => {
       if (!peerConnection.current) initiateWebRTC(senderId, false);
@@ -231,13 +137,10 @@ function App() {
       setIsUnlocked(false);
     });
 
-    // Ask the server if this room already has a password set when joining
     socket.emit('check-room-password', { roomId });
     
     socket.on('password-check-response', (serverPassword) => {
-      if (serverPassword) {
-        setRoomPassword(serverPassword);
-      }
+      if (serverPassword) setRoomPassword(serverPassword);
     });
 
     return () => {
@@ -284,9 +187,8 @@ function App() {
   const setupDataChannelHandlers = (channel) => {
     channel.binaryType = 'arraybuffer';
     
-    channel.onmessage = (event) => {
+    channel.onmessage = async (event) => {
       if (typeof event.data === 'string') {
-        // Metadata incoming header block
         const metadata = JSON.parse(event.data);
         incomingFileName.current = metadata.name;
         incomingFileSize.current = metadata.size;
@@ -294,18 +196,16 @@ function App() {
         setProgress(0);
         setTransferSpeed("Streaming...");
       } else {
-        // Binary chunk data channel incoming stream loop
+        // Handle incoming binary - We assume this is a file transfer for this channel
         incomingBuffer.current.push(event.data);
         const receivedSize = incomingBuffer.current.reduce((acc, chunk) => acc + chunk.byteLength, 0);
         const percentage = Math.round((receivedSize / incomingFileSize.current) * 100);
         setProgress(percentage);
 
         if (receivedSize >= incomingFileSize.current) {
-          // File assemble block complete
           const blob = new Blob(incomingBuffer.current);
           const url = URL.createObjectURL(blob);
           
-          // Inject download asset directly into client browser
           const a = document.createElement('a');
           a.href = url;
           a.download = incomingFileName.current;
@@ -326,7 +226,6 @@ function App() {
       return;
     }
 
-    // Send metadata tracking wrapper text first
     dataChannel.current.send(JSON.stringify({ name: file.name, size: file.size }));
 
     const reader = new FileReader();
@@ -341,7 +240,6 @@ function App() {
       const percentage = Math.round((offset / file.size) * 100);
       setProgress(percentage);
 
-      // Realtime Speed calculation logic
       const elapsedSeconds = (performance.now() - startTime) / 1000;
       const mbps = ((offset / (1024 * 1024)) / (elapsedSeconds || 1)).toFixed(1);
       setTransferSpeed(`${mbps} MB/s`);
@@ -361,28 +259,40 @@ function App() {
     readNextChunk();
   };
 
+  // 4. SECURITY & STATE HANDLERS
   const handleNoteChange = async (e) => {
-    const val = e.target.value;
-    setNote(val);
-    const encrypted = await encryptText(val, roomId);
-    socket.emit('update-note', { roomId, text: encrypted });
+    const newNote = e.target.value;
+    setNote(newNote);
+    
+    // Emit over socket instead of datachannel for note updates so it broadcasts to all
+    if (aesKey) {
+      const encryptedData = await CryptoMatrix.encrypt(newNote, aesKey);
+      socket.emit('update-note', { roomId, text: encryptedData });
+    }
   };
 
-  const handleSetPassword = (e) => {
+  const handleSetPassword = async (e) => { 
     e.preventDefault();
     if (passwordInput.trim()) {
       setRoomPassword(passwordInput);
+      
+      const generatedKey = await CryptoMatrix.deriveKey(passwordInput);
+      setAesKey(generatedKey);
+
       setIsUnlocked(true);
       localStorage.setItem(`pass_${roomId}`, passwordInput);
-      // Tell the backend to force the password requirement on other joining devices
       socket.emit('set-room-password', { roomId, password: passwordInput });
     }
   };
 
-  const handleVerifyPassword = (e) => {
+  const handleVerifyPassword = async (e) => { 
     e.preventDefault();
     if (passwordInput === roomPassword) {
+      const generatedKey = await CryptoMatrix.deriveKey(passwordInput);
+      setAesKey(generatedKey);
+      
       setIsUnlocked(true);
+      localStorage.setItem(`pass_${roomId}`, passwordInput);
     } else {
       alert("❌ Incorrect Room Access Passcode!");
       setPasswordInput('');
@@ -390,34 +300,22 @@ function App() {
   };
 
   const handleClearMatrix = () => {
-    // Wipe local application state immediately
     setNote('');
     setClipboardItems([]);
-    
-    // Broadcast the wipe command to all paired network nodes
     socket.emit('clear-room-data', { roomId });
   };
 
   // Drag and Drop State Handlers
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
+  const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = () => setIsDragging(false);
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
-    
     const files = e.dataTransfer.files;
-    if (files && files[0]) {
-      sendFile(files[0]);
-    }
+    if (files && files[0]) sendFile(files[0]);
   };
 
+  // Clipboard Handlers
   const handleMobilePaste = async () => {
     try {
       if (!navigator.clipboard || !navigator.clipboard.readText) {
@@ -426,23 +324,23 @@ function App() {
       }
       
       const text = await navigator.clipboard.readText();
-      if (text) {
-        // Run the exact same payload logic your global key listener uses
+      if (text && aesKey) {
+        const encrypted = await CryptoMatrix.encrypt(text, aesKey);
         const localPayload = { type: 'text', content: text, timestamp: new Date().toLocaleTimeString() };
+        const networkPayload = { type: 'text', content: encrypted, timestamp: localPayload.timestamp };
+        
         setClipboardItems((prev) => [localPayload, ...prev]);
-        socket.emit('share-clipboard', { roomId, data: localPayload });
+        socket.emit('share-clipboard', { roomId, data: networkPayload });
       }
     } catch (err) {
-      console.error("Failed to read system clipboard: ", err);
       alert("📋 Click inside the app first, then tap Paste to grant browser clipboard access.");
     }
   };
 
-  // Global browser canvas context paste hooks (Ctrl+V)
-  // Global browser clipboard context paste handler with Image Support
   useEffect(() => {
     const handlePaste = async (e) => {
-      // 1. Check for Image files in the clipboard
+      if (!aesKeyRef.current) return; // Cannot paste if not unlocked
+
       const items = e.clipboardData.items;
       for (let i = 0; i < items.length; i++) {
         if (items[i].type.indexOf('image') !== -1) {
@@ -451,7 +349,7 @@ function App() {
           
           reader.onload = async (event) => {
             const base64Image = event.target.result;
-            const encrypted = await encryptText(base64Image, roomId);
+            const encrypted = await CryptoMatrix.encrypt(base64Image, aesKeyRef.current);
             const localPayload = { type: 'image', content: base64Image, timestamp: new Date().toLocaleTimeString() };
             const networkPayload = { type: 'image', content: encrypted, timestamp: localPayload.timestamp };
             
@@ -460,14 +358,13 @@ function App() {
           };
           
           reader.readAsDataURL(file);
-          return; // Stop execution if image is processed
+          return;
         }
       }
 
-      // 2. Fallback to standard Text pasting if no image is found
       const text = e.clipboardData.getData('text');
       if (text) {
-        const encrypted = await encryptText(text, roomId);
+        const encrypted = await CryptoMatrix.encrypt(text, aesKeyRef.current);
         const localPayload = { type: 'text', content: text, timestamp: new Date().toLocaleTimeString() };
         const networkPayload = { type: 'text', content: encrypted, timestamp: localPayload.timestamp };
         
@@ -506,7 +403,7 @@ function App() {
           </div>
         </div>
 
-        {/* HEADER CONTROLS (SMOOTH HOVERS) */}
+        {/* HEADER CONTROLS */}
         <div className="flex items-center gap-3">
           <button 
             onClick={handleClearMatrix}
@@ -620,7 +517,7 @@ function App() {
               </span>
             </div>
 
-            {/* TELEMETRY BAR (FIXED HEIGHT) */}
+            {/* TELEMETRY BAR */}
             <div className="bg-[#0a0a0f]/80 backdrop-blur-sm border border-white/10 p-5 rounded-3xl shadow-lg hover:border-white/20 transition-all duration-300 hover:-translate-y-1">
               <div className="flex items-center gap-2 border-b border-white/5 pb-3 mb-4">
                 <Zap size={12} className="text-[#60a5fa]" />
@@ -646,7 +543,6 @@ function App() {
           {/* RIGHT COLUMN: TEXTAREA & CLIPBOARD */}
           <section className="flex flex-col gap-6 h-full">
             
-            {/* NOTES MATRIX (FLEX-1 ALLOWS IT TO GROW) */}
             <div className="flex-1 bg-[#0a0a0f]/80 backdrop-blur-sm border border-white/10 p-5 flex flex-col rounded-3xl shadow-lg hover:border-white/20 transition-all duration-300 hover:-translate-y-1 min-h-[220px] group">
               <div className="flex items-center gap-2 border-b border-white/5 pb-3 mb-4">
                 <FileText size={12} className="text-white group-hover:text-[#60a5fa] transition-colors" />
@@ -661,7 +557,6 @@ function App() {
               />
             </div>
 
-            {/* CLIPBOARD LOG (STRICT HEIGHT SO IT DOESN'T BREAK ALIGNMENT) */}
             <div className="h-[280px] bg-[#0a0a0f]/80 backdrop-blur-sm border border-white/10 p-5 flex flex-col rounded-3xl shadow-lg hover:border-white/20 transition-all duration-300 hover:-translate-y-1 group">
               <div className="flex items-center justify-between border-b border-white/5 pb-3 mb-4">
                 <div className="flex items-center gap-2">
@@ -676,7 +571,6 @@ function App() {
                 </button>
               </div>
 
-              {/* OVERFLOW CONTAINER TO PROTECT GRID LAYOUT */}
               <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
                 {clipboardItems.length === 0 ? (
                   <div className="h-full flex items-center justify-center text-center border border-dashed border-white/10 rounded-2xl bg-black/20">
@@ -739,7 +633,6 @@ function App() {
 }
 
 export default App;
-
 // return (
 //     <div className="min-h-screen bg-[#0b0f19] text-gray-100 flex flex-col selection:bg-blue-500/30 relative">
       
